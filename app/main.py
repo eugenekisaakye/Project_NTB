@@ -3,31 +3,19 @@ Uganda NTB Reporting & Response Platform
 FastAPI Application Entry Point
 """
 
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
-
-
-
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.database import engine, Base
 
-
-
 # ---------------------------------------------------------------------------
-# Import all models here so Base.metadata knows about them before create_all()
+# Import all models via __init__.py so Base.metadata knows about every table
+# before create_all() runs. Importing the package is enough — __init__.py
+# pulls in every model class in FK dependency order.
 # ---------------------------------------------------------------------------
-#from app.models import (
-    # user,
-    # organization,
-    # ntb_category,
-    # ntb_report,
-    # case_attachment,
-    # case_timeline,
-    # case_response,
-    # audit_log,
-#)
+import app.models  # noqa: F401
 
 # ---------------------------------------------------------------------------
 # Import routers (uncomment as you build each module)
@@ -40,11 +28,10 @@ from app.database import engine, Base
 # ---------------------------------------------------------------------------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup — create all tables if they don't exist
-    Base.metadata.create_all(bind=engine)
+    # Startup — create tables that don't exist yet; never drops existing ones
+    Base.metadata.create_all(bind=engine, checkfirst=True)
     print("✅ Database tables verified / created.")
     yield
-    # Shutdown — add any cleanup here (close connections, etc.)
     print("🛑 Application shutting down.")
 
 
