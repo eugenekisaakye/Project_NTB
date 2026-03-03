@@ -20,7 +20,7 @@ import app.models  # noqa: F401
 # ---------------------------------------------------------------------------
 # Import routers (uncomment as you build each module)
 # ---------------------------------------------------------------------------
-# from app.api.v1 import auth, reports, responses, analytics, admin
+from app.api.v1 import auth, reports, responses, analytics, admin
 
 
 # ---------------------------------------------------------------------------
