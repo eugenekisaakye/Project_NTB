@@ -38,7 +38,7 @@ class NTBCategory(Base):
     # ---------------------------------------------------------------------------
     # Relationships
     # ---------------------------------------------------------------------------
-    # ntb_reports = relationship("NTBReport", back_populates="category")  # uncomment when created
+    ntb_reports = relationship("NTBReport", back_populates="category")  # uncomment when created
 
     def __repr__(self) -> str:
         return f"<NTBCategory code={self.code} name={self.name}>"

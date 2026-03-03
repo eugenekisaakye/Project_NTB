@@ -32,7 +32,7 @@ class Organization(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
     users = relationship("User", back_populates="organization")
-    # ntb_reports = relationship("NTBReport", back_populates="organization")
+    ntb_reports = relationship("NTBReport", back_populates="assigned_org")
 
     def __repr__(self) -> str:
         return f"<Organization id={self.id} name={self.name} type={self.type}>"

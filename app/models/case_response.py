@@ -62,16 +62,15 @@ class CaseResponse(Base):
     # Relationships
     # ---------------------------------------------------------------------------
     report = relationship("NTBReport", back_populates="responses")
-    author = relationship("User", foreign_keys=[author_id])
+    author = relationship("User", foreign_keys=[author_id], back_populates="case_responses")
 
     # ---------------------------------------------------------------------------
     # Helpers
     # ---------------------------------------------------------------------------
     @property
     def is_public(self) -> bool:
-        """True when this response is visible to the reporting trader."""
-        return not self.is_internal
+        return not bool(self.is_internal)
 
     def __repr__(self) -> str:
-        visibility = "internal" if self.is_internal else "public"
+        visibility = "internal" if bool(self.is_internal) else "public"
         return f"<CaseResponse id={self.id} report_id={self.report_id} {visibility}>"

@@ -63,7 +63,7 @@ class CaseTimeline(Base):
     # Relationships
     # ---------------------------------------------------------------------------
     report     = relationship("NTBReport", back_populates="timeline")
-    changed_by_user = relationship("User", foreign_keys=[changed_by])
+    changed_by_user = relationship("User", foreign_keys=[changed_by], back_populates="case_timeline")
 
     # ---------------------------------------------------------------------------
     # Helpers

@@ -120,7 +120,7 @@ class NTBReport(Base):
     # ---------------------------------------------------------------------------
     # Relationships
     # ---------------------------------------------------------------------------
-    reporter     = relationship("User",         foreign_keys=[reporter_id], back_populates="ntb_reports")
+    reporter     = relationship("User", foreign_keys=[reporter_id], back_populates="ntb_reports")
     category     = relationship("NTBCategory",  back_populates="ntb_reports")
     assigned_org = relationship("Organization", foreign_keys=[assigned_org_id], back_populates="ntb_reports")
 

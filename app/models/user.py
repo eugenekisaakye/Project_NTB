@@ -83,10 +83,10 @@ class User(Base):
     # Relationships (uncomment as sibling models are created)
     # ---------------------------------------------------------------------------
     organization   = relationship("Organization", back_populates="users")
-    # ntb_reports    = relationship("NTBReport",    back_populates="user")
-    # case_responses = relationship("CaseResponse", back_populates="user")
-    # case_timeline  = relationship("CaseTimeline", back_populates="user")
-    # audit_logs     = relationship("AuditLog",     back_populates="user")
+    ntb_reports    = relationship("NTBReport",    back_populates="user")
+    case_responses = relationship("CaseResponse", back_populates="user")
+    case_timeline  = relationship("CaseTimeline", back_populates="user")
+    audit_logs     = relationship("AuditLog",     back_populates="user")
 
     # ---------------------------------------------------------------------------
     # Helpers

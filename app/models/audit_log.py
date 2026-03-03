@@ -78,7 +78,7 @@ class AuditLog(Base):
     # ---------------------------------------------------------------------------
     # Relationships
     # ---------------------------------------------------------------------------
-    user = relationship("User", foreign_keys=[user_id])
+    user = relationship("User", foreign_keys=[user_id], back_populates="audit_logs")
 
     # ---------------------------------------------------------------------------
     # Helpers
