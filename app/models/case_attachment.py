@@ -1,11 +1,26 @@
 """
-CaseAttachment model — Table 5.6 of the Uganda NTB SRS
+case_attachment.py — CaseAttachment model
 
-Business rules enforced at the application layer (Pydantic / service):
-  - Max 5 attachments per report (SRS BR-attach-count)
-  - Max file size 5 MB per file (SRS BR-attach-size)
-  - Allowed MIME types: image/jpeg, image/png, application/pdf (SRS BR-attach-type)
-  - stored_path must be outside the web root (SRS NFR-security)
+Stores metadata about files uploaded alongside an NTB report
+(e.g. a photo of a blocked shipment, a PDF of a rejected customs form).
+
+IMPORTANT — the actual file bytes are NOT stored in the database.
+Only the metadata is stored here. The file lives on the server at
+stored_path, which must be outside the web root so it cannot be
+accessed directly via a URL (SRS NFR-security).
+
+LIMITS (enforced in the upload service, not the DB):
+  - Max 5 attachments per report       → MAX_ATTACHMENTS_PER_REPORT
+  - Max 5 MB per file                  → MAX_FILE_SIZE_BYTES
+  - Only JPEG, PNG, PDF are accepted   → ALLOWED_MIME_TYPES
+
+These constants are defined here as the single source of truth so the
+upload service, validators, and any future checks all use the same values.
+
+Attachments are IMMUTABLE after upload — there is no updated_at.
+
+DB TABLE: case_attachments
+SRS REFERENCE: Table 5.6
 """
 
 import uuid
@@ -17,22 +32,24 @@ from sqlalchemy.orm import relationship
 
 from app.database import Base
 
-# Allowed MIME types — kept here as the single source of truth so the
-# upload service and any validators can import from one place.
+# ---------------------------------------------------------------------------
+# Upload constraints — import these into the upload service instead of
+# hardcoding the same numbers in multiple places
+# ---------------------------------------------------------------------------
 ALLOWED_MIME_TYPES: frozenset[str] = frozenset({
     "image/jpeg",
     "image/png",
     "application/pdf",
 })
 
-MAX_FILE_SIZE_BYTES: int = 5 * 1024 * 1024   # 5 MB
+MAX_FILE_SIZE_BYTES: int = 5 * 1024 * 1024   # 5 MB in bytes
 MAX_ATTACHMENTS_PER_REPORT: int = 5
 
 
 class CaseAttachment(Base):
     __tablename__ = "case_attachments"
 
-    # Primary key
+    # Unique identifier
     id = Column(
         UUID(as_uuid=True),
         primary_key=True,
@@ -40,7 +57,7 @@ class CaseAttachment(Base):
         nullable=False,
     )
 
-    # Parent report
+    # Which report this file belongs to
     report_id = Column(
         UUID(as_uuid=True),
         ForeignKey("ntb_reports.id"),
@@ -48,18 +65,27 @@ class CaseAttachment(Base):
         index=True,
     )
 
-    # File metadata
-    filename    = Column(String(255), nullable=False)   # sanitized original filename
-    stored_path = Column(String(500), nullable=False)   # absolute server path, outside web root
-    mime_type   = Column(String(100), nullable=False)   # validated against ALLOWED_MIME_TYPES
-    file_size   = Column(Integer,     nullable=False)   # bytes; validated ≤ MAX_FILE_SIZE_BYTES
+    # The original filename, sanitized to remove path traversal characters
+    # (e.g. "../../etc/passwd" must be rejected at the service layer)
+    filename = Column(String(255), nullable=False)
 
-    # Timestamp — no updated_at; attachments are immutable after upload
+    # Absolute server-side path to the stored file.
+    # Must be outside the web root (e.g. /var/ntb_uploads/, NOT /var/www/)
+    stored_path = Column(String(500), nullable=False)
+
+    # MIME type as detected/validated during upload. Must be in ALLOWED_MIME_TYPES.
+    mime_type = Column(String(100), nullable=False)
+
+    # File size in bytes. Must be ≤ MAX_FILE_SIZE_BYTES.
+    file_size = Column(Integer, nullable=False)
+
+    # Upload timestamp — immutable, no updated_at
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     # ---------------------------------------------------------------------------
     # Relationships
     # ---------------------------------------------------------------------------
+    # Back-reference to the parent report
     report = relationship("NTBReport", back_populates="attachments")
 
     # ---------------------------------------------------------------------------
@@ -67,7 +93,7 @@ class CaseAttachment(Base):
     # ---------------------------------------------------------------------------
     @property
     def file_size_kb(self) -> float:
-        """Convenience property — returns file size in kilobytes."""
+        """Returns file size in kilobytes — handy for display in the UI."""
         return round(cast(int, self.file_size) / 1024, 2)
 
     def __repr__(self) -> str:

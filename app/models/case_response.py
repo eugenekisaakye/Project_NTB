@@ -1,15 +1,31 @@
 """
-CaseResponse model — Table 5.8 of the Uganda NTB SRS
+case_response.py — CaseResponse model
 
-Stores both public responses (visible to the reporting trader) and
-internal notes (visible to MDA officers and admins only).
+Stores written responses and internal notes posted on an NTB case.
 
-Business rules enforced at the application layer:
-  - content length: 10–5,000 characters (SRS BR-response-length)
-  - Only MDA officers and admins may post responses (SRS RBAC matrix)
-  - Traders may only read responses where is_internal = False (SRS BR-006/007)
+VISIBILITY:
+  is_internal = False → PUBLIC response, visible to the reporting trader
+  is_internal = True  → INTERNAL note, visible to MDA officers and admins only
 
-No updated_at — responses are immutable after posting.
+  The trader-facing API must filter out internal notes before returning
+  responses (SRS BR-006/007). This is enforced in the service/route layer,
+  NOT in the DB — so be careful not to expose is_internal=True rows to traders.
+
+WHO CAN POST:
+  Only MDA officers and admins may post responses (SRS RBAC matrix).
+  Traders can READ public responses but cannot create them.
+  This is enforced in the route layer via role checks.
+
+CONTENT LENGTH:
+  10 to 5,000 characters — validated by Pydantic before saving.
+
+IMMUTABILITY:
+  Responses cannot be edited or deleted after posting.
+  There is no updated_at column. This preserves the integrity of the
+  communication record between the platform and the trader.
+
+DB TABLE: case_responses
+SRS REFERENCE: Table 5.8
 """
 
 import uuid
@@ -24,7 +40,7 @@ from app.database import Base
 class CaseResponse(Base):
     __tablename__ = "case_responses"
 
-    # Primary key
+    # Unique identifier
     id = Column(
         UUID(as_uuid=True),
         primary_key=True,
@@ -32,7 +48,7 @@ class CaseResponse(Base):
         nullable=False,
     )
 
-    # Parent report
+    # Which NTB report this response is posted on
     report_id = Column(
         UUID(as_uuid=True),
         ForeignKey("ntb_reports.id"),
@@ -40,28 +56,33 @@ class CaseResponse(Base):
         index=True,
     )
 
-    # Author — always a registered user; guests cannot post responses
+    # The MDA officer or admin who wrote this response
+    # (guests and traders cannot post responses)
     author_id = Column(
         UUID(as_uuid=True),
         ForeignKey("users.id"),
         nullable=False,
     )
 
-    # Response body — 10–5,000 chars enforced by Pydantic
+    # The response body — 10 to 5,000 characters, enforced by Pydantic
     content = Column(Text, nullable=False)
 
     # Visibility flag:
-    #   False (default) → public response, visible to the reporting trader
-    #   True            → internal note, visible to MDA officers and admins only
+    #   False (default) = public, shown to the trader who filed the report
+    #   True            = internal note, shown only to MDA officers and admins
+    # The API MUST check this flag before returning responses to a trader.
     is_internal = Column(Boolean, default=False, nullable=False)
 
-    # Immutable timestamp — no updated_at
+    # Timestamp of when the response was posted — immutable, no updated_at
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     # ---------------------------------------------------------------------------
     # Relationships
     # ---------------------------------------------------------------------------
+    # The parent NTB report
     report = relationship("NTBReport", back_populates="responses")
+
+    # The officer/admin who authored this response
     author = relationship("User", foreign_keys=[author_id], back_populates="case_responses")
 
     # ---------------------------------------------------------------------------
@@ -69,6 +90,7 @@ class CaseResponse(Base):
     # ---------------------------------------------------------------------------
     @property
     def is_public(self) -> bool:
+        """True when this response is visible to the reporting trader."""
         return not bool(self.is_internal)
 
     def __repr__(self) -> str:

@@ -1,14 +1,41 @@
 """
-AuditLog model — Table 5.9 of the Uganda NTB SRS
+audit_log.py — AuditLog model
 
-Append-only, immutable record of every sensitive action in the system.
-No updated_at — rows must never be modified or deleted (SRS NFR-audit).
+A tamper-evident, append-only log of every significant action taken in the system.
+Think of it as the system's "black box recorder" — it answers the question
+"who did what, to which record, and when?"
 
-Action naming convention: <resource>.<verb>
-  e.g. case.assign, case.reject, case.status_change,
-       user.create, user.deactivate,
-       organization.create,
-       category.deactivate
+WHEN TO WRITE AN AUDIT LOG:
+  Every sensitive or administrative action should produce one row here.
+  Use the dot-namespaced action string convention:
+    case.assign          → a case was assigned to an MDA
+    case.reject          → a case was rejected
+    case.status_change   → any other status transition
+    user.create          → a new user was registered
+    user.deactivate      → a user account was deactivated
+    organization.create  → a new organization was added
+    category.deactivate  → an NTB category was soft-deleted
+
+  Write audit logs from the SERVICE LAYER, not from models or routes directly.
+
+SYSTEM ACTIONS:
+  user_id = NULL means the action was triggered by the system itself
+  (e.g. an automated SLA escalation job), not by a human user.
+  The is_system_action property makes this easy to check.
+
+THE 'details' FIELD:
+  A flexible JSONB blob for anything useful about the action.
+  Typical patterns:
+    {"before": {"status": "submitted"}, "after": {"status": "assigned"}}
+    {"assigned_org_id": "<uuid>", "note": "Assigned by admin Alice"}
+    {"deactivated_reason": "User left the organization"}
+
+IMMUTABILITY (SRS NFR-audit):
+  Rows MUST NEVER be updated or deleted. There is no updated_at.
+  If you need to correct a mistake, add a new compensating log entry.
+
+DB TABLE: audit_log
+SRS REFERENCE: Table 5.9
 """
 
 import uuid
@@ -23,19 +50,21 @@ from app.database import Base
 
 
 # ---------------------------------------------------------------------------
-# Resource type enum — constrains resource_type to known entity types
+# AuditResourceType enum
+# Constrains resource_type to known entity types so filters are predictable.
+# Add new values here when you add new auditable entity types.
 # ---------------------------------------------------------------------------
 class AuditResourceType(str, PyEnum):
-    REPORT       = "report"
-    USER         = "user"
-    ORGANIZATION = "organization"
-    CATEGORY     = "category"
+    REPORT       = "report"        # An NTBReport record
+    USER         = "user"          # A User record
+    ORGANIZATION = "organization"  # An Organization record
+    CATEGORY     = "category"      # An NTBCategory record
 
 
 class AuditLog(Base):
     __tablename__ = "audit_log"
 
-    # Primary key
+    # Unique identifier
     id = Column(
         UUID(as_uuid=True),
         primary_key=True,
@@ -43,7 +72,8 @@ class AuditLog(Base):
         nullable=False,
     )
 
-    # Actor — NULL for system-initiated actions (e.g. auto-escalation, auto-close)
+    # Who performed the action.
+    # NULL = system-triggered action (no human actor), e.g. auto-escalation.
     user_id = Column(
         UUID(as_uuid=True),
         ForeignKey("users.id"),
@@ -51,23 +81,27 @@ class AuditLog(Base):
         index=True,
     )
 
-    # Action performed — dot-namespaced string, e.g. "case.assign"
+    # Dot-namespaced string describing what happened (e.g. "case.assign")
+    # Keep these consistent — see the naming convention in the module docstring above.
     action = Column(String(100), nullable=False)
 
-    # Affected entity
-    resource_type = Column(String(50), nullable=False)   # AuditResourceType value
-    resource_id   = Column(UUID(as_uuid=True), nullable=False)
+    # Which type of entity was affected — use AuditResourceType values
+    resource_type = Column(String(50), nullable=False)
 
-    # Structured context — before/after values, metadata, extra identifiers.
-    # JSONB allows efficient querying of nested fields in PostgreSQL.
-    # Example: {"before": {"status": "submitted"}, "after": {"status": "assigned"},
-    #            "assigned_org_id": "<uuid>"}
+    # The UUID of the specific record that was affected
+    resource_id = Column(UUID(as_uuid=True), nullable=False)
+
+    # Flexible extra context — store before/after values, metadata, etc.
+    # Using JSONB (PostgreSQL) allows efficient queries on nested fields,
+    # e.g. WHERE details->>'assigned_org_id' = '<uuid>'
     details = Column(JSONB, nullable=True)
 
-    # Client IP — stored for security investigations; supports IPv4 and IPv6
+    # Client IP address of the actor — useful for security investigations.
+    # Supports both IPv4 (max 15 chars) and IPv6 (max 45 chars).
     ip_address = Column(String(45), nullable=True)
 
-    # Immutable timestamp — no updated_at
+    # When the action occurred — indexed for time-range queries on the audit trail.
+    # Immutable — no updated_at.
     created_at = Column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -78,6 +112,7 @@ class AuditLog(Base):
     # ---------------------------------------------------------------------------
     # Relationships
     # ---------------------------------------------------------------------------
+    # The user who performed the action (None for system actions)
     user = relationship("User", foreign_keys=[user_id], back_populates="audit_logs")
 
     # ---------------------------------------------------------------------------
@@ -85,7 +120,7 @@ class AuditLog(Base):
     # ---------------------------------------------------------------------------
     @property
     def is_system_action(self) -> bool:
-        """True when the action was triggered by the system, not a human user."""
+        """True when this audit entry was generated by an automated process, not a user."""
         return self.user_id is None
 
     def __repr__(self) -> str:

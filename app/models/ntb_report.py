@@ -1,6 +1,30 @@
 """
-NTB Report model — Table 5.5 of the Uganda NTB SRS
-Also defines CaseStatus enum used by case_timeline.py
+ntb_report.py — NTB Report model + CaseStatus enum
+
+This is the core table of the platform. An NTB Report is a complaint filed
+by a trader (or anonymous guest) about a Non-Tariff Barrier they encountered.
+
+CASE LIFECYCLE (state machine from SRS Section 3.2):
+
+  submitted → under_review → assigned → under_investigation → resolved
+                                    ↘                       ↘
+                                    rejected              escalated → resolved
+                                                                    ↘ closed
+
+  Any state can move to 'closed' by an admin.
+  'rejected' requires a rejection_reason (enforced in the service layer).
+
+GUEST vs REGISTERED SUBMISSIONS:
+  Registered users: reporter_id is set, guest_* fields are NULL
+  Anonymous guests: reporter_id is NULL, guest_email/phone provide a contact
+
+LOCATION:
+  district is mandatory (used for regional analytics).
+  GPS coordinates are optional and validated against Uganda's bounding box
+  at the Pydantic layer before they reach here.
+
+DB TABLE: ntb_reports
+SRS REFERENCE: Table 5.5
 """
 
 import uuid
@@ -25,17 +49,18 @@ from app.database import Base
 
 
 # ---------------------------------------------------------------------------
-# Case status enum — matches the state machine in SRS Section 3.2 exactly
+# CaseStatus enum
+# Imported by case_timeline.py too — always import from here, not there.
 # ---------------------------------------------------------------------------
 class CaseStatus(str, PyEnum):
-    SUBMITTED           = "submitted"
-    UNDER_REVIEW        = "under_review"
-    ASSIGNED            = "assigned"
-    UNDER_INVESTIGATION = "under_investigation"
-    ESCALATED           = "escalated"
-    RESOLVED            = "resolved"
-    REJECTED            = "rejected"
-    CLOSED              = "closed"
+    SUBMITTED           = "submitted"            # Just filed, no officer has reviewed it yet
+    UNDER_REVIEW        = "under_review"         # An admin/officer is looking at it
+    ASSIGNED            = "assigned"             # Handed to a specific MDA org for investigation
+    UNDER_INVESTIGATION = "under_investigation"  # The assigned org is actively working it
+    ESCALATED           = "escalated"            # SLA breached or complexity requires escalation
+    RESOLVED            = "resolved"             # NTB addressed; outcome recorded
+    REJECTED            = "rejected"             # Invalid or duplicate report; reason required
+    CLOSED              = "closed"               # Archived; no further action
 
 
 # ---------------------------------------------------------------------------
@@ -44,7 +69,7 @@ class CaseStatus(str, PyEnum):
 class NTBReport(Base):
     __tablename__ = "ntb_reports"
 
-    # Primary key
+    # Unique identifier (internal, used for FK references)
     id = Column(
         UUID(as_uuid=True),
         primary_key=True,
@@ -52,26 +77,30 @@ class NTBReport(Base):
         nullable=False,
     )
 
-    # Human-readable case ID — format NTB-YYYY-NNNNN (SRS Appendix 15.3)
-    # Generated at the application layer before insert; never auto-incremented
-    # in the DB so it remains portable across environments.
+    # Human-readable case reference shown to traders and officers
+    # Format: NTB-YYYY-NNNNN (e.g. NTB-2024-00042)
+    # Generated in the service layer before insert — NOT auto-incremented in DB
+    # so it stays consistent if the DB is migrated or restored.
     case_id = Column(String(20), unique=True, nullable=False, index=True)
 
     # ---------------------------------------------------------------------------
-    # Reporter — registered user OR anonymous guest (both are valid, SRS BR-guest)
+    # Who filed this report?
     # ---------------------------------------------------------------------------
+    # For registered users — links to the users table
     reporter_id = Column(
         UUID(as_uuid=True),
         ForeignKey("users.id"),
-        nullable=True,   # NULL for guest submissions
+        nullable=True,   # NULL = guest submission
         index=True,
     )
-    guest_email = Column(String(255), nullable=True)   # contact for guest reporters
+    # For anonymous guests — we store contact info directly on the report
+    guest_email = Column(String(255), nullable=True)
     guest_phone = Column(String(20),  nullable=True)
 
     # ---------------------------------------------------------------------------
-    # NTB details
+    # What is the barrier?
     # ---------------------------------------------------------------------------
+    # Which category of NTB this falls under (e.g. "Import Licensing")
     category_id = Column(
         UUID(as_uuid=True),
         ForeignKey("ntb_categories.id"),
@@ -79,21 +108,31 @@ class NTBReport(Base):
         index=True,
     )
 
-    description   = Column(Text,        nullable=False)   # 10–2,000 chars enforced by Pydantic
-    incident_date = Column(Date,        nullable=False)
+    # Free-text description of the barrier — 10 to 2,000 chars (enforced by Pydantic)
+    description = Column(Text, nullable=False)
 
-    # Location — district is mandatory; detail + GPS are optional
+    # When the barrier was experienced (not when the report was filed)
+    incident_date = Column(Date, nullable=False)
+
+    # ---------------------------------------------------------------------------
+    # Where did it happen?
+    # ---------------------------------------------------------------------------
+    # Ugandan district name — mandatory; drives the regional analytics dashboard
     location_district = Column(String(100), nullable=False, index=True)
-    location_detail   = Column(String(255), nullable=True)
 
-    # GPS coordinates — Uganda bounds: lat -1.5→4.3, lon 29.5→35.1
-    # Validated at the application layer via Pydantic, stored as-is here.
+    # Optional freeform detail (e.g. "Malaba border post, lane 3")
+    location_detail = Column(String(255), nullable=True)
+
+    # Optional GPS — validated at the Pydantic layer against Uganda's bounding box:
+    #   latitude:  -1.5 to  4.3
+    #   longitude: 29.5 to 35.1
     latitude  = Column(Numeric(10, 7), nullable=True)
     longitude = Column(Numeric(10, 7), nullable=True)
 
     # ---------------------------------------------------------------------------
-    # Case management
+    # Case management fields (updated by MDA officers / admins)
     # ---------------------------------------------------------------------------
+    # Current state in the lifecycle — see CaseStatus enum above
     status = Column(
         Enum(CaseStatus, name="case_status_enum"),
         nullable=False,
@@ -101,38 +140,66 @@ class NTBReport(Base):
         index=True,
     )
 
+    # Which MDA organization is handling this case (set when status → assigned)
     assigned_org_id = Column(
         UUID(as_uuid=True),
         ForeignKey("organizations.id"),
         nullable=True,
         index=True,
     )
-    assigned_at      = Column(DateTime(timezone=True), nullable=True)
-    resolved_at      = Column(DateTime(timezone=True), nullable=True)
+    assigned_at  = Column(DateTime(timezone=True), nullable=True)  # Timestamp of assignment
+    resolved_at  = Column(DateTime(timezone=True), nullable=True)  # Timestamp of resolution
 
-    # Mandatory when status = REJECTED (enforced at application layer, SRS BR-015)
+    # REQUIRED when status = rejected. Must explain why the report was rejected.
+    # Validated in the service layer (SRS BR-015).
     rejection_reason = Column(Text, nullable=True)
 
-    # Timestamps
+    # Auto-managed timestamps
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
     # ---------------------------------------------------------------------------
     # Relationships
     # ---------------------------------------------------------------------------
-    reporter     = relationship("User", foreign_keys=[reporter_id], back_populates="ntb_reports")
-    category     = relationship("NTBCategory",  back_populates="ntb_reports")
+    # The user who filed this report (None for guest submissions)
+    reporter = relationship("User", foreign_keys=[reporter_id], back_populates="ntb_reports")
+
+    # The NTB category this report is classified under
+    category = relationship("NTBCategory", back_populates="ntb_reports")
+
+    # The MDA organization assigned to investigate this case
     assigned_org = relationship("Organization", foreign_keys=[assigned_org_id], back_populates="ntb_reports")
 
-    attachments = relationship("CaseAttachment", back_populates="report", cascade="all, delete-orphan")
-    timeline    = relationship("CaseTimeline",   back_populates="report", cascade="all, delete-orphan", order_by="CaseTimeline.created_at")
-    responses   = relationship("CaseResponse",   back_populates="report", cascade="all, delete-orphan", order_by="CaseResponse.created_at")
+    # Files attached to this report (max 5, enforced in the service layer)
+    # cascade="all, delete-orphan" means attachments are deleted if the report is deleted
+    attachments = relationship(
+        "CaseAttachment",
+        back_populates="report",
+        cascade="all, delete-orphan",
+    )
+
+    # Ordered history of every status change on this case
+    timeline = relationship(
+        "CaseTimeline",
+        back_populates="report",
+        cascade="all, delete-orphan",
+        order_by="CaseTimeline.created_at",
+    )
+
+    # All responses/notes posted on this case, oldest first
+    responses = relationship(
+        "CaseResponse",
+        back_populates="report",
+        cascade="all, delete-orphan",
+        order_by="CaseResponse.created_at",
+    )
 
     # ---------------------------------------------------------------------------
     # Helpers
     # ---------------------------------------------------------------------------
     @property
     def is_guest_submission(self) -> bool:
+        """True when this report was filed without a registered account."""
         return self.reporter_id is None
 
     def __repr__(self) -> str:
