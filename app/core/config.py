@@ -1,8 +1,5 @@
 """
 app/core/config.py
-
-Centralised settings — reads from .env via pydantic-settings.
-Import `settings` anywhere in the app; never read os.getenv() directly.
 """
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -38,10 +35,20 @@ class Settings(BaseSettings):
     # --- Frontend ---
     FRONTEND_URL: str = "http://localhost:3000"
 
+    # --- File uploads ---
+    UPLOAD_DIR:           str = "./uploads"
+    MAX_FILE_SIZE_MB:     int = 5
+    MAX_FILES_PER_REPORT: int = 5
+
+    # --- Pagination ---
+    DEFAULT_PAGE_SIZE: int = 20
+    MAX_PAGE_SIZE:     int = 100
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=True,
+        extra="ignore",
     )
 
 
